@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>High-Speed Email Sender (100+ Optimized)</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .badge {
+            display: inline-block;
+            background: rgba(255,255,255,0.2);
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-top: 8px;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .section {
+            margin-bottom: 25px;
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-title::before {
+            content: '';
+            width: 4px;
+            height: 20px;
+            background: #667eea;
+            border-radius: 2px;
+        }
+
+        input, textarea {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: all 0.3s;
+        }
+
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 120px;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 13px;
+            color: #666;
+            font-weight: 500;
+        }
+
+        .smtp-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .recipients-area {
+            position: relative;
+        }
+
+        .recipients-help {
+            font-size: 12px;
+            color: #999;
+            margin-top: 6px;
+        }
+
+        .email-counter {
+            position: absolute;
+            top: -28px;
+            right: 0;
+            font-size: 12px;
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 14px 32px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            margin-top: 25px;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 10px;
+            display: none;
+        }
+
+        .status.active {
+            display: block;
+        }
+
+        .mode-indicator {
+            background: #667eea;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            display: inline-block;
+            margin-bottom: 12px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        .status-text {
+            font-size: 14px;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .status-details {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .stat-box {
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #667eea;
+        }
+
+        .stat-label {
+            font-size: 11px;
+            color: #999;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+
+        .error-log {
+            max-height: 150px;
+            overflow-y: auto;
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-size: 12px;
+            color: #d32f2f;
+            display: none;
+        }
+
+        .error-log.active {
+            display: block;
+        }
+
+        .error-item {
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #ffebee;
+        }
+
+        .error-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        @media (max-width: 768px) {
+            .smtp-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .status-details {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ High-Speed Email Sender</h1>
+            <p>Fast, robust, concurrent email delivery</p>
+            <div class="badge">🚀 Optimized for 100+ emails</div>
+        </div>
+
+        <div class="content">
+            <div class="section">
+                <div class="section-title">SMTP Configuration</div>
+                <div class="smtp-grid">
+                    <div class="input-group">
+                        <label>Email Address</label>
+                        <input type="email" id="emailAddress" placeholder="your@hostinger.com">
+                    </div>
+                    <div class="input-group">
+                        <label>Password</label>
+                        <input type="password" id="emailPassword" placeholder="Your email password">
+                    </div>
+                </div>
+                <div class="smtp-grid">
+                    <div class="input-group">
+                        <label>SMTP Server (optional)</label>
+                        <input type="text" id="smtpServer" placeholder="smtp.hostinger.com" value="smtp.hostinger.com">
+                    </div>
+                    <div class="input-group">
+                        <label>SMTP Port (optional)</label>
+                        <input type="number" id="smtpPort" placeholder="465" value="465">
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Email Content</div>
+                <div class="input-group">
+                    <label>Subject</label>
+                    <input type="text" id="emailSubject" placeholder="Enter email subject">
+                </div>
+                <div class="input-group">
+                    <label>Body</label>
+                    <textarea id="emailBody" placeholder="Enter your email message here...
+
+Example with formatting:
+Salam,
+
+We're setting up an official Aierpify WhatsApp community.
+
+The goal is straightforward:
+• Share real-time updates
+• Notify you about maintenance
+• Collect feedback
+
+Please reply with your WhatsApp number.
+
+Best regards,
+Team"></textarea>
+                    <div class="recipients-help">💡 Line breaks will be preserved in the email</div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Recipients</div>
+                <div class="recipients-area">
+                    <span class="email-counter" id="emailCounter">0 emails</span>
+                    <textarea id="recipients" placeholder="Enter recipient emails (one per line)&#10;example1@email.com&#10;example2@email.com&#10;example3@email.com"></textarea>
+                    <div class="recipients-help">💡 Add one email address per line. System auto-switches to bulk mode for 20+ emails.</div>
+                </div>
+            </div>
+
+            <button class="btn" id="sendBtn" onclick="sendEmails()">
+                🚀 Send Emails
+            </button>
+
+            <div class="status" id="status">
+                <div class="mode-indicator" id="modeIndicator">Standard Mode</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="status-text" id="statusText">Preparing to send...</div>
+                <div class="status-details">
+                    <div class="stat-box">
+                        <div class="stat-value" id="totalCount">0</div>
+                        <div class="stat-label">Total</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="successCount">0</div>
+                        <div class="stat-label">Sent</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="failCount">0</div>
+                        <div class="stat-label">Failed</div>
+                    </div>
+                </div>
+                <div class="error-log" id="errorLog"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isSending = false;
+
+        // Update email counter as user types
+        document.getElementById('recipients').addEventListener('input', function() {
+            const text = this.value.trim();
+            const emails = text.split('\n').filter(e => e.trim() && e.includes('@'));
+            const counter = document.getElementById('emailCounter');
+            counter.textContent = `${emails.length} email${emails.length !== 1 ? 's' : ''}`;
+            
+            if (emails.length >= 20) {
+                counter.style.color = '#4CAF50';
+                counter.textContent = `${emails.length} emails (Bulk Mode 🚀)`;
+            }
+        });
+
+        async function sendEmails() {
+            if (isSending) return;
+
+            // Get form values
+            const email = document.getElementById('emailAddress').value.trim();
+            const password = document.getElementById('emailPassword').value;
+            const subject = document.getElementById('emailSubject').value.trim();
+            const body = document.getElementById('emailBody').value.trim();
+            const recipientsText = document.getElementById('recipients').value.trim();
+            const smtpServer = document.getElementById('smtpServer').value.trim() || 'smtp.hostinger.com';
+            const smtpPort = document.getElementById('smtpPort').value.trim() || '465';
+
+            // Validation
+            if (!email || !password) {
+                alert('Please enter your email and password');
+                return;
+            }
+
+            if (!subject || !body) {
+                alert('Please enter email subject and body');
+                return;
+            }
+
+            if (!recipientsText) {
+                alert('Please enter at least one recipient email');
+                return;
+            }
+
+            // Parse recipients
+            const recipients = recipientsText
+                .split('\n')
+                .map(e => e.trim())
+                .filter(e => e && e.includes('@'));
+
+            if (recipients.length === 0) {
+                alert('No valid email addresses found');
+                return;
+            }
+
+            // For 20+ emails, use bulk API endpoint for better performance
+            if (recipients.length >= 20) {
+                await sendBulk(email, password, recipients, subject, body, smtpServer, smtpPort);
+            } else {
+                await sendSequential(email, password, recipients, subject, body, smtpServer, smtpPort);
+            }
+        }
+
+        async function sendBulk(fromEmail, password, recipients, subject, body, smtpServer, smtpPort) {
+            isSending = true;
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = true;
+            sendBtn.textContent = '⏳ Sending in bulk mode...';
+
+            const status = document.getElementById('status');
+            status.classList.add('active');
+
+            const modeIndicator = document.getElementById('modeIndicator');
+            const statusText = document.getElementById('statusText');
+            const progressFill = document.getElementById('progressFill');
+            const totalCount = document.getElementById('totalCount');
+            const successCount = document.getElementById('successCount');
+            const failCount = document.getElementById('failCount');
+            const errorLog = document.getElementById('errorLog');
+
+            modeIndicator.textContent = '🚀 High-Speed Bulk Mode (15 concurrent)';
+            totalCount.textContent = recipients.length;
+            successCount.textContent = '0';
+            failCount.textContent = '0';
+            progressFill.style.width = '0%';
+            errorLog.innerHTML = '';
+            errorLog.classList.remove('active');
+
+            statusText.textContent = `Sending ${recipients.length} emails using high-speed bulk mode...`;
+
+            try {
+                const response = await fetch('http://localhost:5000/api/send-bulk', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        from: fromEmail,
+                        password: password,
+                        recipients: recipients,
+                        subject: subject,
+                        body: body,
+                        smtp_server: smtpServer,
+                        smtp_port: smtpPort,
+                        max_workers: 15  // High concurrency for 100+ emails
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    successCount.textContent = data.successful;
+                    failCount.textContent = data.failed;
+                    progressFill.style.width = '100%';
+
+                    // Show errors if any
+                    if (data.failed > 0) {
+                        errorLog.classList.add('active');
+                        const failedResults = data.results.filter(r => !r.success);
+                        errorLog.innerHTML = failedResults.map(e => 
+                            `<div class="error-item"><strong>${e.recipient}</strong>: ${e.error}</div>`
+                        ).join('');
+                    }
+
+                    statusText.textContent = `✅ Complete! ${data.successful} sent, ${data.failed} failed in ${Math.round(data.successful / 3)}-${Math.round(data.successful / 2)}s`;
+                } else {
+                    throw new Error(data.error || 'Bulk send failed');
+                }
+            } catch (error) {
+                statusText.textContent = `❌ Error: ${error.message}`;
+                errorLog.classList.add('active');
+                errorLog.innerHTML = `<div class="error-item">${error.message}</div>`;
+            }
+
+            sendBtn.disabled = false;
+            sendBtn.textContent = '🚀 Send Emails';
+            isSending = false;
+        }
+
+        async function sendSequential(fromEmail, password, recipients, subject, body, smtpServer, smtpPort) {
+            isSending = true;
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = true;
+            sendBtn.textContent = '⏳ Sending...';
+
+            const status = document.getElementById('status');
+            status.classList.add('active');
+
+            const modeIndicator = document.getElementById('modeIndicator');
+            const statusText = document.getElementById('statusText');
+            const progressFill = document.getElementById('progressFill');
+            const totalCount = document.getElementById('totalCount');
+            const successCount = document.getElementById('successCount');
+            const failCount = document.getElementById('failCount');
+            const errorLog = document.getElementById('errorLog');
+
+            modeIndicator.textContent = '⚡ Standard Mode (10 concurrent)';
+            totalCount.textContent = recipients.length;
+            successCount.textContent = '0';
+            failCount.textContent = '0';
+            progressFill.style.width = '0%';
+            errorLog.innerHTML = '';
+            errorLog.classList.remove('active');
+
+            let sent = 0;
+            let failed = 0;
+            const errors = [];
+
+            statusText.textContent = `Sending to ${recipients.length} recipients...`;
+
+            // Send emails concurrently with batching
+            const batchSize = 10; // Send 10 at a time for high-speed processing
+            for (let i = 0; i < recipients.length; i += batchSize) {
+                const batch = recipients.slice(i, i + batchSize);
+                const promises = batch.map(recipient => sendEmail(fromEmail, password, recipient, subject, body, smtpServer, smtpPort));
+                
+                const results = await Promise.allSettled(promises);
+                
+                results.forEach((result, idx) => {
+                    const recipient = batch[idx];
+                    if (result.status === 'fulfilled' && result.value.success) {
+                        sent++;
+                        successCount.textContent = sent;
+                    } else {
+                        failed++;
+                        failCount.textContent = failed;
+                        const error = result.status === 'rejected' ? result.reason : result.value.error;
+                        errors.push({ recipient, error });
+                    }
+                });
+
+                const progress = ((i + batch.length) / recipients.length) * 100;
+                progressFill.style.width = Math.min(progress, 100) + '%';
+                statusText.textContent = `Sent ${sent + failed} of ${recipients.length} emails...`;
+            }
+
+            // Show results
+            if (failed > 0) {
+                errorLog.classList.add('active');
+                errorLog.innerHTML = errors.map(e => 
+                    `<div class="error-item"><strong>${e.recipient}</strong>: ${e.error}</div>`
+                ).join('');
+            }
+
+            statusText.textContent = `✅ Complete! ${sent} sent, ${failed} failed`;
+            sendBtn.disabled = false;
+            sendBtn.textContent = '🚀 Send Emails';
+            isSending = false;
+        }
+
+        async function sendEmail(fromEmail, password, toEmail, subject, body, smtpServer, smtpPort) {
+            try {
+                const formData = {
+                    from: fromEmail,
+                    password: password,
+                    to: toEmail,
+                    subject: subject,
+                    body: body,
+                    smtp_server: smtpServer,
+                    smtp_port: smtpPort
+                };
+
+                const response = await fetch('http://localhost:5000/api/send-email', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    return { success: true };
+                } else {
+                    return { success: false, error: data.error || 'Unknown error' };
+                }
+            } catch (error) {
+                return { success: false, error: error.message };
+            }
+        }
+    </script>
+</body>
+</html>
