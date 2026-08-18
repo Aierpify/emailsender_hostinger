@@ -273,6 +273,80 @@
                 grid-template-columns: 1fr;
             }
         }
+
+        .mode-toggle {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 25px;
+            background: #f0f0f5;
+            padding: 4px;
+            border-radius: 10px;
+        }
+
+        .mode-toggle button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            background: transparent;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #666;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .mode-toggle button.active {
+            background: white;
+            color: #667eea;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .personalized-row {
+            background: #f9f9fc;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 12px;
+            position: relative;
+        }
+
+        .personalized-row .row-remove {
+            position: absolute;
+            top: 10px;
+            right: 12px;
+            background: none;
+            border: none;
+            color: #d32f2f;
+            font-size: 13px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .personalized-row textarea {
+            min-height: 80px;
+        }
+
+        .add-row-btn {
+            width: 100%;
+            padding: 12px;
+            background: white;
+            border: 2px dashed #667eea;
+            border-radius: 8px;
+            color: #667eea;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+
+        .add-row-btn:hover {
+            background: #f5f5ff;
+        }
+
+        .hidden {
+            display: none !important;
+        }
     </style>
 </head>
 <body>
@@ -306,17 +380,29 @@
                         <input type="number" id="smtpPort" placeholder="465" value="465">
                     </div>
                 </div>
+                <div class="smtp-grid">
+                    <div class="input-group">
+                        <label>Max emails today (default 30, hard cap 100)</label>
+                        <input type="number" id="dailyLimit" aria-label="Max emails today" min="1" max="100" value="30">
+                    </div>
+                </div>
             </div>
 
-            <div class="section">
-                <div class="section-title">Email Content</div>
-                <div class="input-group">
-                    <label>Subject</label>
-                    <input type="text" id="emailSubject" placeholder="Enter email subject">
-                </div>
-                <div class="input-group">
-                    <label>Body</label>
-                    <textarea id="emailBody" placeholder="Enter your email message here...
+            <div class="mode-toggle">
+                <button type="button" id="sameModeBtn" class="active" onclick="setMode('same')">✉️ Same Message to All</button>
+                <button type="button" id="personalizedModeBtn" onclick="setMode('personalized')">🎯 Specific Mail per Email</button>
+            </div>
+
+            <div id="sameModeSection">
+                <div class="section">
+                    <div class="section-title">Email Content</div>
+                    <div class="input-group">
+                        <label>Subject</label>
+                        <input type="text" id="emailSubject" placeholder="Enter email subject">
+                    </div>
+                    <div class="input-group">
+                        <label>Body</label>
+                        <textarea id="emailBody" placeholder="Enter your email message here...
 
 Example with formatting:
 Salam,
@@ -332,16 +418,31 @@ Please reply with your WhatsApp number.
 
 Best regards,
 Team"></textarea>
-                    <div class="recipients-help">💡 Line breaks will be preserved in the email</div>
+                        <div class="recipients-help">💡 Line breaks will be preserved in the email</div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Recipients</div>
+                    <div class="recipients-area">
+                        <span class="email-counter" id="emailCounter">0 emails</span>
+                        <textarea id="recipients" placeholder="Enter recipient emails (one per line)&#10;example1@email.com&#10;example2@email.com&#10;example3@email.com"></textarea>
+                        <div class="recipients-help">💡 Add one email address per line, or upload a CSV below.</div>
+                        <input type="file" id="csvFile" aria-label="CSV File" accept=".csv" onchange="handleCsvUpload(event)">
+                        <div class="recipients-help">💡 CSV upload: any column with "mail" in its header is used automatically.</div>
+                        <div class="recipients-help">⏱️ Emails are sent one at a time with a random 5+ minute gap between each — a large list will take a while.</div>
+                    </div>
                 </div>
             </div>
 
-            <div class="section">
-                <div class="section-title">Recipients</div>
-                <div class="recipients-area">
-                    <span class="email-counter" id="emailCounter">0 emails</span>
-                    <textarea id="recipients" placeholder="Enter recipient emails (one per line)&#10;example1@email.com&#10;example2@email.com&#10;example3@email.com"></textarea>
-                    <div class="recipients-help">💡 Add one email address per line. System auto-switches to bulk mode for 20+ emails.</div>
+            <div id="personalizedModeSection" class="hidden">
+                <div class="section">
+                    <div class="section-title">Recipients &amp; Their Own Message</div>
+                    <div class="recipients-help" style="margin-bottom: 15px;">💡 Each recipient below gets only their own subject and body — nobody sees anyone else's message.</div>
+                    <input type="file" id="personalizedCsvFile" accept=".csv" onchange="handlePersonalizedCsvUpload(event)">
+                    <div class="recipients-help" style="margin-bottom: 15px;">💡 CSV upload: needs an email column, plus optionally a "Subject" column and a "body"/"message" column — each row becomes its own recipient row below.</div>
+                    <div id="personalizedRows"></div>
+                    <button type="button" class="add-row-btn" onclick="addPersonalizedRow()">+ Add Recipient</button>
                 </div>
             </div>
 
@@ -376,6 +477,82 @@ Team"></textarea>
 
     <script>
         let isSending = false;
+        let currentMode = 'same';
+        let rowIdCounter = 0;
+
+        function setMode(mode) {
+            currentMode = mode;
+            document.getElementById('sameModeBtn').classList.toggle('active', mode === 'same');
+            document.getElementById('personalizedModeBtn').classList.toggle('active', mode === 'personalized');
+            document.getElementById('sameModeSection').classList.toggle('hidden', mode !== 'same');
+            document.getElementById('personalizedModeSection').classList.toggle('hidden', mode !== 'personalized');
+
+            if (mode === 'personalized' && document.getElementById('personalizedRows').children.length === 0) {
+                addPersonalizedRow();
+                addPersonalizedRow();
+            }
+        }
+
+        function addPersonalizedRow(prefill) {
+            prefill = prefill || {};
+            rowIdCounter++;
+            const id = rowIdCounter;
+            const row = document.createElement('div');
+            row.className = 'personalized-row';
+            row.id = `row-${id}`;
+            row.innerHTML = `
+                <button type="button" class="row-remove" onclick="removePersonalizedRow(${id})">✕ Remove</button>
+                <div class="input-group">
+                    <label>Recipient Email</label>
+                    <input type="email" class="p-to" placeholder="someone@example.com">
+                </div>
+                <div class="input-group">
+                    <label>Subject</label>
+                    <input type="text" class="p-subject" placeholder="Subject for this recipient">
+                </div>
+                <div class="input-group">
+                    <label>Body</label>
+                    <textarea class="p-body" placeholder="Message for this recipient only..."></textarea>
+                </div>
+            `;
+            document.getElementById('personalizedRows').appendChild(row);
+            if (prefill.to) row.querySelector('.p-to').value = prefill.to;
+            if (prefill.subject) row.querySelector('.p-subject').value = prefill.subject;
+            if (prefill.body) row.querySelector('.p-body').value = prefill.body;
+        }
+
+        async function handlePersonalizedCsvUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const response = await fetch('http://localhost:5000/api/parse-csv', { method: 'POST', body: formData });
+                const data = await response.json();
+                if (!data.success) { alert(data.error || 'Failed to parse CSV'); return; }
+                if (!data.rows.length) { alert('No usable rows found in that CSV'); return; }
+                if (!data.subject_column) {
+                    alert('No "Subject" column detected in that CSV — add one, or fill subjects in manually after import.');
+                }
+                if (!data.body_column) {
+                    alert('No body/message column detected in that CSV — add one, or fill bodies in manually after import.');
+                }
+
+                // Clear any existing empty starter rows, then add one row per CSV entry
+                document.getElementById('personalizedRows').innerHTML = '';
+                data.rows.forEach(r => {
+                    addPersonalizedRow({ to: r._email, subject: r._subject, body: r._body });
+                });
+            } catch (error) {
+                alert('CSV upload failed: ' + error.message);
+            }
+            event.target.value = '';
+        }
+
+        function removePersonalizedRow(id) {
+            const row = document.getElementById(`row-${id}`);
+            if (row) row.remove();
+        }
 
         // Update email counter as user types
         document.getElementById('recipients').addEventListener('input', function() {
@@ -390,8 +567,38 @@ Team"></textarea>
             }
         });
 
+        async function handleCsvUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const response = await fetch('http://localhost:5000/api/parse-csv', { method: 'POST', body: formData });
+                const data = await response.json();
+                if (!data.success) { alert(data.error || 'Failed to parse CSV'); return; }
+                const emails = data.rows.map(r => r._email).filter(Boolean);
+                if (emails.length === 0) { alert('No email addresses found in that CSV'); return; }
+                const textarea = document.getElementById('recipients');
+                const existing = textarea.value.trim();
+                textarea.value = existing ? existing + '\n' + emails.join('\n') : emails.join('\n');
+                textarea.dispatchEvent(new Event('input'));
+            } catch (error) {
+                alert('CSV upload failed: ' + error.message);
+            }
+            event.target.value = '';
+        }
+
+        function getDailyLimit() {
+            return parseInt(document.getElementById('dailyLimit').value, 10) || 30;
+        }
+
         async function sendEmails() {
             if (isSending) return;
+
+            if (currentMode === 'personalized') {
+                await sendPersonalized();
+                return;
+            }
 
             // Get form values
             const email = document.getElementById('emailAddress').value.trim();
@@ -429,91 +636,62 @@ Team"></textarea>
                 return;
             }
 
-            // For 20+ emails, use bulk API endpoint for better performance
-            if (recipients.length >= 20) {
-                await sendBulk(email, password, recipients, subject, body, smtpServer, smtpPort);
-            } else {
-                await sendSequential(email, password, recipients, subject, body, smtpServer, smtpPort);
-            }
+            await runJob('/api/send-bulk', {
+                from: email,
+                password: password,
+                recipients: recipients,
+                subject: subject,
+                body: body,
+                smtp_server: smtpServer,
+                smtp_port: smtpPort,
+                daily_limit: getDailyLimit()
+            }, recipients.length, '🐢 Paced Send');
         }
 
-        async function sendBulk(fromEmail, password, recipients, subject, body, smtpServer, smtpPort) {
-            isSending = true;
-            const sendBtn = document.getElementById('sendBtn');
-            sendBtn.disabled = true;
-            sendBtn.textContent = '⏳ Sending in bulk mode...';
+        async function sendPersonalized() {
+            const email = document.getElementById('emailAddress').value.trim();
+            const password = document.getElementById('emailPassword').value;
+            const smtpServer = document.getElementById('smtpServer').value.trim() || 'smtp.hostinger.com';
+            const smtpPort = document.getElementById('smtpPort').value.trim() || '465';
 
-            const status = document.getElementById('status');
-            status.classList.add('active');
+            if (!email || !password) {
+                alert('Please enter your email and password');
+                return;
+            }
 
-            const modeIndicator = document.getElementById('modeIndicator');
-            const statusText = document.getElementById('statusText');
-            const progressFill = document.getElementById('progressFill');
-            const totalCount = document.getElementById('totalCount');
-            const successCount = document.getElementById('successCount');
-            const failCount = document.getElementById('failCount');
-            const errorLog = document.getElementById('errorLog');
-
-            modeIndicator.textContent = '🚀 High-Speed Bulk Mode (15 concurrent)';
-            totalCount.textContent = recipients.length;
-            successCount.textContent = '0';
-            failCount.textContent = '0';
-            progressFill.style.width = '0%';
-            errorLog.innerHTML = '';
-            errorLog.classList.remove('active');
-
-            statusText.textContent = `Sending ${recipients.length} emails using high-speed bulk mode...`;
-
-            try {
-                const response = await fetch('http://localhost:5000/api/send-bulk', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        from: fromEmail,
-                        password: password,
-                        recipients: recipients,
-                        subject: subject,
-                        body: body,
-                        smtp_server: smtpServer,
-                        smtp_port: smtpPort,
-                        max_workers: 15  // High concurrency for 100+ emails
-                    })
-                });
-
-                const data = await response.json();
-
-                if (data.success) {
-                    successCount.textContent = data.successful;
-                    failCount.textContent = data.failed;
-                    progressFill.style.width = '100%';
-
-                    // Show errors if any
-                    if (data.failed > 0) {
-                        errorLog.classList.add('active');
-                        const failedResults = data.results.filter(r => !r.success);
-                        errorLog.innerHTML = failedResults.map(e => 
-                            `<div class="error-item"><strong>${e.recipient}</strong>: ${e.error}</div>`
-                        ).join('');
+            const rows = document.querySelectorAll('#personalizedRows .personalized-row');
+            const messages = [];
+            for (const row of rows) {
+                const to = row.querySelector('.p-to').value.trim();
+                const subject = row.querySelector('.p-subject').value.trim();
+                const body = row.querySelector('.p-body').value.trim();
+                if (to || subject || body) {
+                    if (!to || !to.includes('@') || !subject || !body) {
+                        alert('Each recipient row needs a valid email, subject, and body. Check the incomplete row.');
+                        return;
                     }
-
-                    statusText.textContent = `✅ Complete! ${data.successful} sent, ${data.failed} failed in ${Math.round(data.successful / 3)}-${Math.round(data.successful / 2)}s`;
-                } else {
-                    throw new Error(data.error || 'Bulk send failed');
+                    messages.push({ to, subject, body });
                 }
-            } catch (error) {
-                statusText.textContent = `❌ Error: ${error.message}`;
-                errorLog.classList.add('active');
-                errorLog.innerHTML = `<div class="error-item">${error.message}</div>`;
             }
 
-            sendBtn.disabled = false;
-            sendBtn.textContent = '🚀 Send Emails';
-            isSending = false;
+            if (messages.length === 0) {
+                alert('Add at least one recipient with their subject and body');
+                return;
+            }
+
+            await runJob('/api/send-personalized', {
+                from: email,
+                password: password,
+                messages: messages,
+                smtp_server: smtpServer,
+                smtp_port: smtpPort,
+                daily_limit: getDailyLimit()
+            }, messages.length, '🎯 Paced Personalized Send');
         }
 
-        async function sendSequential(fromEmail, password, recipients, subject, body, smtpServer, smtpPort) {
+        // Shared by sendEmails/sendPersonalized: kicks off a backend job (which
+        // spaces sends 5+ minutes apart) and polls it until done.
+        async function runJob(endpoint, payload, total, label) {
             isSending = true;
             const sendBtn = document.getElementById('sendBtn');
             sendBtn.disabled = true;
@@ -530,90 +708,58 @@ Team"></textarea>
             const failCount = document.getElementById('failCount');
             const errorLog = document.getElementById('errorLog');
 
-            modeIndicator.textContent = '⚡ Standard Mode (10 concurrent)';
-            totalCount.textContent = recipients.length;
+            modeIndicator.textContent = `${label} (min 5-min gap between sends)`;
+            totalCount.textContent = total;
             successCount.textContent = '0';
             failCount.textContent = '0';
             progressFill.style.width = '0%';
             errorLog.innerHTML = '';
             errorLog.classList.remove('active');
+            statusText.textContent = `Queuing ${total} emails...`;
 
-            let sent = 0;
-            let failed = 0;
-            const errors = [];
-
-            statusText.textContent = `Sending to ${recipients.length} recipients...`;
-
-            // Send emails concurrently with batching
-            const batchSize = 10; // Send 10 at a time for high-speed processing
-            for (let i = 0; i < recipients.length; i += batchSize) {
-                const batch = recipients.slice(i, i + batchSize);
-                const promises = batch.map(recipient => sendEmail(fromEmail, password, recipient, subject, body, smtpServer, smtpPort));
-                
-                const results = await Promise.allSettled(promises);
-                
-                results.forEach((result, idx) => {
-                    const recipient = batch[idx];
-                    if (result.status === 'fulfilled' && result.value.success) {
-                        sent++;
-                        successCount.textContent = sent;
-                    } else {
-                        failed++;
-                        failCount.textContent = failed;
-                        const error = result.status === 'rejected' ? result.reason : result.value.error;
-                        errors.push({ recipient, error });
-                    }
+            try {
+                const response = await fetch('http://localhost:5000' + endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
                 });
+                const data = await response.json();
+                if (!data.success) throw new Error(data.error || 'Failed to start send job');
 
-                const progress = ((i + batch.length) / recipients.length) * 100;
-                progressFill.style.width = Math.min(progress, 100) + '%';
-                statusText.textContent = `Sent ${sent + failed} of ${recipients.length} emails...`;
-            }
+                const jobId = data.job_id;
+                while (true) {
+                    await new Promise(r => setTimeout(r, 4000));
+                    const poll = await fetch(`http://localhost:5000/api/job-status/${jobId}`);
+                    const job = await poll.json();
+                    if (!job.success) throw new Error(job.error || 'Lost track of the send job');
 
-            // Show results
-            if (failed > 0) {
+                    successCount.textContent = job.sent;
+                    failCount.textContent = job.failed;
+                    const done = job.sent + job.failed;
+                    progressFill.style.width = Math.min((done / total) * 100, 100) + '%';
+                    statusText.textContent = job.done
+                        ? `✅ Complete! ${job.sent} sent, ${job.failed} failed`
+                        : `${job.status} (${done}/${total})`;
+
+                    if (job.done) {
+                        if (job.failed > 0) {
+                            errorLog.classList.add('active');
+                            errorLog.innerHTML = job.results.filter(r => !r.success).map(e =>
+                                `<div class="error-item"><strong>${e.recipient}</strong>: ${e.error}</div>`
+                            ).join('');
+                        }
+                        break;
+                    }
+                }
+            } catch (error) {
+                statusText.textContent = `❌ Error: ${error.message}`;
                 errorLog.classList.add('active');
-                errorLog.innerHTML = errors.map(e => 
-                    `<div class="error-item"><strong>${e.recipient}</strong>: ${e.error}</div>`
-                ).join('');
+                errorLog.innerHTML = `<div class="error-item">${error.message}</div>`;
             }
 
-            statusText.textContent = `✅ Complete! ${sent} sent, ${failed} failed`;
             sendBtn.disabled = false;
             sendBtn.textContent = '🚀 Send Emails';
             isSending = false;
-        }
-
-        async function sendEmail(fromEmail, password, toEmail, subject, body, smtpServer, smtpPort) {
-            try {
-                const formData = {
-                    from: fromEmail,
-                    password: password,
-                    to: toEmail,
-                    subject: subject,
-                    body: body,
-                    smtp_server: smtpServer,
-                    smtp_port: smtpPort
-                };
-
-                const response = await fetch('http://localhost:5000/api/send-email', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(formData)
-                });
-
-                const data = await response.json();
-                
-                if (data.success) {
-                    return { success: true };
-                } else {
-                    return { success: false, error: data.error || 'Unknown error' };
-                }
-            } catch (error) {
-                return { success: false, error: error.message };
-            }
         }
     </script>
 </body>
