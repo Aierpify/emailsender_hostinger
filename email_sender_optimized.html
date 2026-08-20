@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -23,7 +24,7 @@
             margin: 0 auto;
             background: white;
             border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             overflow: hidden;
         }
 
@@ -46,7 +47,7 @@
 
         .badge {
             display: inline-block;
-            background: rgba(255,255,255,0.2);
+            background: rgba(255, 255, 255, 0.2);
             padding: 4px 12px;
             border-radius: 12px;
             font-size: 12px;
@@ -79,7 +80,8 @@
             border-radius: 2px;
         }
 
-        input, textarea {
+        input,
+        textarea {
             width: 100%;
             padding: 12px 16px;
             border: 2px solid #e0e0e0;
@@ -89,7 +91,8 @@
             transition: all 0.3s;
         }
 
-        input:focus, textarea:focus {
+        input:focus,
+        textarea:focus {
             outline: none;
             border-color: #667eea;
             box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
@@ -126,6 +129,10 @@
             font-size: 12px;
             color: #999;
             margin-top: 6px;
+        }
+
+        .mb-15 {
+            margin-bottom: 15px;
         }
 
         .email-counter {
@@ -264,11 +271,96 @@
             padding-bottom: 0;
         }
 
+        .btn-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-row .btn {
+            flex: 1;
+            width: auto;
+        }
+
+        .btn-stop {
+            background: #d32f2f;
+            width: auto;
+            padding: 14px 24px;
+            flex-shrink: 0;
+            display: none;
+        }
+
+        .btn-stop.active {
+            display: block;
+        }
+
+        .next-send-timer {
+            font-size: 13px;
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 10px;
+            display: none;
+        }
+
+        .next-send-timer.active {
+            display: block;
+        }
+
+        .live-log {
+            max-height: 220px;
+            overflow-y: auto;
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-size: 12px;
+            display: none;
+        }
+
+        .live-log.active {
+            display: block;
+        }
+
+        .live-log-item {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 6px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .live-log-item:last-child {
+            border-bottom: none;
+        }
+
+        .live-log-item .recipient {
+            color: #333;
+            word-break: break-all;
+        }
+
+        .live-log-item .verdict {
+            flex-shrink: 0;
+            font-weight: 600;
+        }
+
+        .live-log-item.ok .verdict {
+            color: #2e7d32;
+        }
+
+        .live-log-item.fail .verdict {
+            color: #d32f2f;
+        }
+
+        .live-log-item .reason {
+            display: block;
+            font-size: 11px;
+            color: #999;
+        }
+
         @media (max-width: 768px) {
             .smtp-grid {
                 grid-template-columns: 1fr;
             }
-            
+
             .status-details {
                 grid-template-columns: 1fr;
             }
@@ -299,7 +391,7 @@
         .mode-toggle button.active {
             background: white;
             color: #667eea;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         }
 
         .personalized-row {
@@ -349,6 +441,7 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         <div class="header">
@@ -389,8 +482,10 @@
             </div>
 
             <div class="mode-toggle">
-                <button type="button" id="sameModeBtn" class="active" onclick="setMode('same')">✉️ Same Message to All</button>
-                <button type="button" id="personalizedModeBtn" onclick="setMode('personalized')">🎯 Specific Mail per Email</button>
+                <button type="button" id="sameModeBtn" class="active" onclick="setMode('same')">✉️ Same Message to
+                    All</button>
+                <button type="button" id="personalizedModeBtn" onclick="setMode('personalized')">🎯 Specific Mail per
+                    Email</button>
             </div>
 
             <div id="sameModeSection">
@@ -426,11 +521,15 @@ Team"></textarea>
                     <div class="section-title">Recipients</div>
                     <div class="recipients-area">
                         <span class="email-counter" id="emailCounter">0 emails</span>
-                        <textarea id="recipients" placeholder="Enter recipient emails (one per line)&#10;example1@email.com&#10;example2@email.com&#10;example3@email.com"></textarea>
+                        <textarea id="recipients"
+                            placeholder="Enter recipient emails (one per line)&#10;example1@email.com&#10;example2@email.com&#10;example3@email.com"></textarea>
                         <div class="recipients-help">💡 Add one email address per line, or upload a CSV below.</div>
-                        <input type="file" id="csvFile" aria-label="CSV File" accept=".csv" onchange="handleCsvUpload(event)">
-                        <div class="recipients-help">💡 CSV upload: any column with "mail" in its header is used automatically.</div>
-                        <div class="recipients-help">⏱️ Emails are sent one at a time with a random 5+ minute gap between each — a large list will take a while.</div>
+                        <input type="file" id="csvFile" aria-label="CSV File" accept=".csv"
+                            onchange="handleCsvUpload(event)">
+                        <div class="recipients-help">💡 CSV upload: any column with "mail" in its header is used
+                            automatically.</div>
+                        <div class="recipients-help">⏱️ Emails are sent one at a time with a random 5+ minute gap
+                            between each — a large list will take a while.</div>
                     </div>
                 </div>
             </div>
@@ -438,17 +537,26 @@ Team"></textarea>
             <div id="personalizedModeSection" class="hidden">
                 <div class="section">
                     <div class="section-title">Recipients &amp; Their Own Message</div>
-                    <div class="recipients-help" style="margin-bottom: 15px;">💡 Each recipient below gets only their own subject and body — nobody sees anyone else's message.</div>
-                    <input type="file" id="personalizedCsvFile" accept=".csv" onchange="handlePersonalizedCsvUpload(event)">
-                    <div class="recipients-help" style="margin-bottom: 15px;">💡 CSV upload: needs an email column, plus optionally a "Subject" column and a "body"/"message" column — each row becomes its own recipient row below.</div>
+                    <div class="recipients-help mb-15">💡 Each recipient below gets only their
+                        own subject and body — nobody sees anyone else's message.</div>
+                    <input type="file" id="personalizedCsvFile" accept=".csv"
+                        onchange="handlePersonalizedCsvUpload(event)">
+                    <div class="recipients-help mb-15">💡 CSV upload: needs an email column, plus
+                        optionally a "Subject" column and a "body"/"message" column — each row becomes its own recipient
+                        row below.</div>
                     <div id="personalizedRows"></div>
                     <button type="button" class="add-row-btn" onclick="addPersonalizedRow()">+ Add Recipient</button>
                 </div>
             </div>
 
-            <button class="btn" id="sendBtn" onclick="sendEmails()">
-                🚀 Send Emails
-            </button>
+            <div class="btn-row">
+                <button class="btn" id="sendBtn" onclick="sendEmails()">
+                    🚀 Send Emails
+                </button>
+                <button class="btn btn-stop" id="stopBtn" onclick="stopJob()">
+                    ⏹ Stop
+                </button>
+            </div>
 
             <div class="status" id="status">
                 <div class="mode-indicator" id="modeIndicator">Standard Mode</div>
@@ -456,6 +564,7 @@ Team"></textarea>
                     <div class="progress-fill" id="progressFill"></div>
                 </div>
                 <div class="status-text" id="statusText">Preparing to send...</div>
+                <div class="next-send-timer" id="nextSendTimer"></div>
                 <div class="status-details">
                     <div class="stat-box">
                         <div class="stat-value" id="totalCount">0</div>
@@ -470,6 +579,7 @@ Team"></textarea>
                         <div class="stat-label">Failed</div>
                     </div>
                 </div>
+                <div class="live-log" id="liveLog"></div>
                 <div class="error-log" id="errorLog"></div>
             </div>
         </div>
@@ -555,12 +665,12 @@ Team"></textarea>
         }
 
         // Update email counter as user types
-        document.getElementById('recipients').addEventListener('input', function() {
+        document.getElementById('recipients').addEventListener('input', function () {
             const text = this.value.trim();
             const emails = text.split('\n').filter(e => e.trim() && e.includes('@'));
             const counter = document.getElementById('emailCounter');
             counter.textContent = `${emails.length} email${emails.length !== 1 ? 's' : ''}`;
-            
+
             if (emails.length >= 20) {
                 counter.style.color = '#4CAF50';
                 counter.textContent = `${emails.length} emails (Bulk Mode 🚀)`;
@@ -689,13 +799,68 @@ Team"></textarea>
             }, messages.length, '🎯 Paced Personalized Send');
         }
 
+        let currentJobId = null;
+        let countdownInterval = null;
+
+        async function stopJob() {
+            if (!currentJobId) return;
+            const stopBtn = document.getElementById('stopBtn');
+            stopBtn.disabled = true;
+            stopBtn.textContent = '⏳ Stopping...';
+            try {
+                await fetch(`http://localhost:5000/api/job-cancel/${currentJobId}`, { method: 'POST' });
+            } catch (error) {
+                alert('Failed to stop: ' + error.message);
+            }
+            stopBtn.disabled = false;
+            stopBtn.textContent = '⏹ Stop';
+        }
+
+        function renderLiveLogItem(result) {
+            const liveLog = document.getElementById('liveLog');
+            liveLog.classList.add('active');
+            const item = document.createElement('div');
+            item.className = 'live-log-item ' + (result.success ? 'ok' : 'fail');
+            item.innerHTML = result.success
+                ? `<span class="recipient">${result.recipient}</span><span class="verdict">✅ Sent</span>`
+                : `<span class="recipient">${result.recipient}<span class="reason">${result.error || 'Unknown error'}</span></span><span class="verdict">❌ Failed</span>`;
+            liveLog.appendChild(item);
+            liveLog.scrollTop = liveLog.scrollHeight;
+        }
+
+        function updateNextSendTimer(nextSendAt) {
+            const timerEl = document.getElementById('nextSendTimer');
+            if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+            if (!nextSendAt) { timerEl.classList.remove('active'); return; }
+
+            const tick = () => {
+                const remaining = Math.max(0, Math.round(nextSendAt - Date.now() / 1000));
+                if (remaining <= 0) {
+                    timerEl.classList.remove('active');
+                    clearInterval(countdownInterval);
+                    countdownInterval = null;
+                    return;
+                }
+                const m = Math.floor(remaining / 60);
+                const s = remaining % 60;
+                timerEl.classList.add('active');
+                timerEl.textContent = `⏱️ Next email in ${m}:${String(s).padStart(2, '0')}`;
+            };
+            tick();
+            countdownInterval = setInterval(tick, 1000);
+        }
+
         // Shared by sendEmails/sendPersonalized: kicks off a backend job (which
         // spaces sends 5+ minutes apart) and polls it until done.
         async function runJob(endpoint, payload, total, label) {
             isSending = true;
             const sendBtn = document.getElementById('sendBtn');
+            const stopBtn = document.getElementById('stopBtn');
             sendBtn.disabled = true;
             sendBtn.textContent = '⏳ Sending...';
+            stopBtn.classList.add('active');
+            stopBtn.disabled = false;
+            stopBtn.textContent = '⏹ Stop';
 
             const status = document.getElementById('status');
             status.classList.add('active');
@@ -707,6 +872,7 @@ Team"></textarea>
             const successCount = document.getElementById('successCount');
             const failCount = document.getElementById('failCount');
             const errorLog = document.getElementById('errorLog');
+            const liveLog = document.getElementById('liveLog');
 
             modeIndicator.textContent = `${label} (min 5-min gap between sends)`;
             totalCount.textContent = total;
@@ -715,7 +881,13 @@ Team"></textarea>
             progressFill.style.width = '0%';
             errorLog.innerHTML = '';
             errorLog.classList.remove('active');
+            liveLog.innerHTML = '';
+            liveLog.classList.remove('active');
             statusText.textContent = `Queuing ${total} emails...`;
+            updateNextSendTimer(null);
+
+            let loggedCount = 0;
+            currentJobId = null;
 
             try {
                 const response = await fetch('http://localhost:5000' + endpoint, {
@@ -727,21 +899,28 @@ Team"></textarea>
                 if (!data.success) throw new Error(data.error || 'Failed to start send job');
 
                 const jobId = data.job_id;
+                currentJobId = jobId;
                 while (true) {
-                    await new Promise(r => setTimeout(r, 4000));
+                    await new Promise(r => setTimeout(r, 3000));
                     const poll = await fetch(`http://localhost:5000/api/job-status/${jobId}`);
                     const job = await poll.json();
                     if (!job.success) throw new Error(job.error || 'Lost track of the send job');
+
+                    // Append any newly-arrived results to the live log
+                    for (; loggedCount < job.results.length; loggedCount++) {
+                        renderLiveLogItem(job.results[loggedCount]);
+                    }
 
                     successCount.textContent = job.sent;
                     failCount.textContent = job.failed;
                     const done = job.sent + job.failed;
                     progressFill.style.width = Math.min((done / total) * 100, 100) + '%';
-                    statusText.textContent = job.done
-                        ? `✅ Complete! ${job.sent} sent, ${job.failed} failed`
-                        : `${job.status} (${done}/${total})`;
+                    updateNextSendTimer(job.next_send_at);
 
                     if (job.done) {
+                        statusText.textContent = job.status === 'stopped by user'
+                            ? `⏹ Stopped — ${job.sent} sent, ${job.failed} failed, ${total - done} not attempted`
+                            : `✅ Complete! ${job.sent} sent, ${job.failed} failed`;
                         if (job.failed > 0) {
                             errorLog.classList.add('active');
                             errorLog.innerHTML = job.results.filter(r => !r.success).map(e =>
@@ -750,6 +929,7 @@ Team"></textarea>
                         }
                         break;
                     }
+                    statusText.textContent = `${job.status} (${done}/${total})`;
                 }
             } catch (error) {
                 statusText.textContent = `❌ Error: ${error.message}`;
@@ -757,10 +937,14 @@ Team"></textarea>
                 errorLog.innerHTML = `<div class="error-item">${error.message}</div>`;
             }
 
+            updateNextSendTimer(null);
+            stopBtn.classList.remove('active');
             sendBtn.disabled = false;
             sendBtn.textContent = '🚀 Send Emails';
             isSending = false;
+            currentJobId = null;
         }
     </script>
 </body>
+
 </html>

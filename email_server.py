@@ -62,6 +62,29 @@ def reserve_daily_quota(from_email, count, daily_limit=None):
             json.dump(data, f)
         return True, None
 
+def release_daily_quota(from_email, count):
+    """Give back `count` reserved-but-unused sends (e.g. a cancelled job) to
+    today's quota for from_email."""
+    if count <= 0:
+        return
+    key = f"{from_email}:{datetime.date.today().isoformat()}"
+    with _quota_lock:
+        data = _load_quota()
+        data[key] = max(data.get(key, 0) - count, 0)
+        with open(QUOTA_FILE, 'w') as f:
+            json.dump(data, f)
+
+# ---- Persistent send log (who got an email, and why not if they didn't) ----
+SEND_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'send_log.jsonl')
+_log_lock = threading.Lock()
+
+def _append_send_log(job_id, from_email, entry):
+    """entry: {'to', 'success', 'error'} - one line per attempted send."""
+    record = {'job_id': job_id, 'from': from_email, 'time': datetime.datetime.now().isoformat(), **entry}
+    with _log_lock:
+        with open(SEND_LOG_FILE, 'a') as f:
+            f.write(json.dumps(record) + '\n')
+
 # ---- Background send jobs (needed once sends are spaced out by minutes) ----
 JOBS = {}
 _jobs_lock = threading.Lock()
@@ -73,33 +96,74 @@ def next_delay(index):
     ceiling = min(300 + index * 30, 1200)
     return random.uniform(300, ceiling)
 
-def _run_job(job_id, sender, items):
+def _run_job(job_id, sender, items, from_email):
     """items: list of {'to', 'subject', 'body'} dicts, sent one at a time
-    with a random delay between each (see next_delay)."""
+    with a random delay between each (see next_delay). Checks the job's
+    'cancelled' flag before each send/wait so the Stop button can interrupt
+    it; any not-yet-sent items have their reserved quota released."""
     results = []
     total = len(items)
     for i, item in enumerate(items):
+        with _jobs_lock:
+            cancelled = JOBS[job_id]['cancelled']
+        if cancelled:
+            break
         if i > 0:
             delay = next_delay(i)
             with _jobs_lock:
                 JOBS[job_id]['status'] = f'waiting ~{int(delay / 60)} min before next send'
-            time.sleep(delay)
+                JOBS[job_id]['next_send_at'] = time.time() + delay
+            # Sleep in small slices so a cancel mid-wait takes effect quickly
+            slept = 0
+            while slept < delay:
+                with _jobs_lock:
+                    if JOBS[job_id]['cancelled']:
+                        break
+                time.sleep(min(2, delay - slept))
+                slept += 2
+            with _jobs_lock:
+                cancelled = JOBS[job_id]['cancelled']
+            if cancelled:
+                break
+        with _jobs_lock:
+            JOBS[job_id]['next_send_at'] = None
         result = sender.send_email(item['to'], item['subject'], item['body'])
         results.append(result)
+        _append_send_log(job_id, from_email, result)
         with _jobs_lock:
             JOBS[job_id]['results'] = results
             JOBS[job_id]['sent'] = sum(1 for r in results if r['success'])
             JOBS[job_id]['failed'] = sum(1 for r in results if not r['success'])
             JOBS[job_id]['status'] = f'sent {len(results)}/{total}'
-    with _jobs_lock:
-        JOBS[job_id]['done'] = True
-        JOBS[job_id]['status'] = 'complete'
 
-def start_job(sender, items):
+    with _jobs_lock:
+        unsent = total - len(results)
+        cancelled = JOBS[job_id]['cancelled']
+        JOBS[job_id]['done'] = True
+        JOBS[job_id]['next_send_at'] = None
+        JOBS[job_id]['status'] = 'stopped by user' if cancelled else 'complete'
+    if cancelled and unsent > 0:
+        release_daily_quota(from_email, unsent)
+
+def start_job(sender, items, from_email):
     job_id = str(uuid.uuid4())
-    JOBS[job_id] = {'total': len(items), 'sent': 0, 'failed': 0, 'results': [], 'done': False, 'status': 'starting'}
-    threading.Thread(target=_run_job, args=(job_id, sender, items), daemon=True).start()
+    JOBS[job_id] = {
+        'total': len(items), 'sent': 0, 'failed': 0, 'results': [],
+        'done': False, 'cancelled': False, 'status': 'starting',
+        'next_send_at': None,
+    }
+    threading.Thread(target=_run_job, args=(job_id, sender, items, from_email), daemon=True).start()
     return job_id
+
+def cancel_job(job_id):
+    with _jobs_lock:
+        job = JOBS.get(job_id)
+        if not job:
+            return False
+        if job['done']:
+            return False
+        job['cancelled'] = True
+        return True
 
 def guess_imap_server(smtp_server):
     """Best-effort default: most providers use imap.<domain> alongside smtp.<domain>"""
@@ -287,6 +351,7 @@ def send_single_email():
         # Send email
         sender = EmailSender(smtp_server, smtp_port, from_email, password, imap_server, imap_port, save_to_sent)
         result = sender.send_email(to_email, subject, body)
+        _append_send_log('single', from_email, result)
         
         return jsonify(result)
         
@@ -326,7 +391,7 @@ def send_bulk_emails():
 
         sender = EmailSender(smtp_server, smtp_port, from_email, password, imap_server, imap_port, save_to_sent)
         items = [{'to': r, 'subject': subject, 'body': body} for r in recipients]
-        job_id = start_job(sender, items)
+        job_id = start_job(sender, items, from_email)
 
         return jsonify({'success': True, 'job_id': job_id, 'total': len(items)})
         
@@ -367,7 +432,7 @@ def send_personalized_emails():
             return jsonify({'success': False, 'error': quota_error}), 429
 
         sender = EmailSender(smtp_server, smtp_port, from_email, password, imap_server, imap_port, save_to_sent)
-        job_id = start_job(sender, messages)
+        job_id = start_job(sender, messages, from_email)
 
         return jsonify({'success': True, 'job_id': job_id, 'total': len(messages)})
 
@@ -383,6 +448,34 @@ def job_status(job_id):
         if not job:
             return jsonify({'success': False, 'error': 'Unknown job_id'}), 404
         return jsonify({'success': True, **job})
+
+@app.route('/api/job-cancel/<job_id>', methods=['POST'])
+def job_cancel(job_id):
+    """Stop a running bulk/personalized job. Already-sent emails stay sent;
+    unsent recipients have their reserved daily quota released."""
+    ok = cancel_job(job_id)
+    if not ok:
+        return jsonify({'success': False, 'error': 'Job not found or already finished'}), 404
+    return jsonify({'success': True})
+
+@app.route('/api/send-log', methods=['GET'])
+def send_log():
+    """Return recent send-attempt log entries (who got an email, and why not
+    if they didn't). Optional ?limit=N, default 200, most recent last."""
+    limit = request.args.get('limit', 200, type=int)
+    entries = []
+    try:
+        with open(SEND_LOG_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+    except FileNotFoundError:
+        pass
+    return jsonify({'success': True, 'entries': entries[-limit:]})
 
 @app.route('/api/parse-csv', methods=['POST'])
 def parse_csv():
@@ -439,6 +532,8 @@ if __name__ == '__main__':
     print("  POST /api/send-bulk         - Queue bulk send (spaced 5+ min apart)")
     print("  POST /api/send-personalized - Queue personalized send (spaced 5+ min apart)")
     print("  GET  /api/job-status/<id>   - Poll a bulk/personalized job")
+    print("  POST /api/job-cancel/<id>   - Stop a running job (releases unused quota)")
+    print("  GET  /api/send-log          - Recent send attempts (who/why not)")
     print("  POST /api/parse-csv         - Extract recipient rows from a CSV upload")
     print("  GET  /api/health            - Health check")
     print(f"\nDaily send limit: default {DEFAULT_DAILY_LIMIT}, hard cap {HARD_DAILY_CAP} per sender/day")
