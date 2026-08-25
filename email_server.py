@@ -22,6 +22,8 @@ import uuid
 import json
 import os
 import datetime
+import hashlib
+import socket
 
 app = Flask(__name__)
 CORS(app)
@@ -36,6 +38,7 @@ logger = logging.getLogger(__name__)
 # concurrent writers.
 QUOTA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'daily_send_counts.json')
 DEFAULT_DAILY_LIMIT = 30
+# Each mailbox starts at 30 emails/day and can be configured up to 100.
 HARD_DAILY_CAP = 100
 _quota_lock = threading.Lock()
 
@@ -50,7 +53,7 @@ def reserve_daily_quota(from_email, count, daily_limit=None):
     """Check + reserve `count` sends against today's quota for from_email.
     Returns (ok, error_message_or_None)."""
     daily_limit = min(max(int(daily_limit or DEFAULT_DAILY_LIMIT), 1), HARD_DAILY_CAP)
-    key = f"{from_email}:{datetime.date.today().isoformat()}"
+    key = f"{from_email.strip().lower()}:{datetime.date.today().isoformat()}"
     with _quota_lock:
         data = _load_quota()
         used = data.get(key, 0)
@@ -67,7 +70,7 @@ def release_daily_quota(from_email, count):
     today's quota for from_email."""
     if count <= 0:
         return
-    key = f"{from_email}:{datetime.date.today().isoformat()}"
+    key = f"{from_email.strip().lower()}:{datetime.date.today().isoformat()}"
     with _quota_lock:
         data = _load_quota()
         data[key] = max(data.get(key, 0) - count, 0)
@@ -84,6 +87,72 @@ def _append_send_log(job_id, from_email, entry):
     with _log_lock:
         with open(SEND_LOG_FILE, 'a') as f:
             f.write(json.dumps(record) + '\n')
+
+def _message_key(to_email, subject, body):
+    """A stable identifier for one exact message to one recipient.
+    Sender is intentionally not part of this key: changing mailbox must not
+    bypass duplicate protection."""
+    raw = '\x1f'.join([
+        to_email.strip().lower(), subject.strip(), body.strip()
+    ])
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+def _already_sent_keys():
+    """Return keys for messages that were actually accepted by SMTP before."""
+    keys = set()
+    try:
+        with open(SEND_LOG_FILE) as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                    if record.get('success') and record.get('message_key'):
+                        keys.add(record['message_key'])
+                except json.JSONDecodeError:
+                    continue
+    except FileNotFoundError:
+        pass
+    return keys
+
+def split_duplicate_messages(messages):
+    """Return (sendable, skipped results), including duplicates in this run."""
+    known_keys = _already_sent_keys()
+    seen_keys = set()
+    sendable, skipped = [], []
+    for item in messages:
+        key = _message_key(item['to'], item['subject'], item['body'])
+        if key in known_keys or key in seen_keys:
+            skipped.append({
+                'success': False,
+                'skipped': True,
+                'recipient': item['to'],
+                'error': 'Duplicate email: this exact message was already sent to this recipient.',
+                'message_key': key,
+            })
+            continue
+        seen_keys.add(key)
+        sendable.append({**item, 'message_key': key})
+    return sendable, skipped
+
+def smtp_is_reachable(sender):
+    """Check the network against the SMTP server that the job will use."""
+    try:
+        with socket.create_connection((sender.smtp_server, sender.smtp_port), timeout=8):
+            return True
+    except OSError:
+        return False
+
+def wait_for_network(job_id, sender):
+    """Pause a job while offline and retry every 15 seconds until it returns."""
+    while not smtp_is_reachable(sender):
+        if job_id:
+            with _jobs_lock:
+                job = JOBS[job_id]
+                if job['cancelled'] or job['paused']:
+                    return False
+                job['next_send_at'] = None
+                job['status'] = 'network unavailable — checking again in 15 seconds'
+        time.sleep(15)
+    return True
 
 # ---- Background send jobs (needed once sends are spaced out by minutes) ----
 JOBS = {}
@@ -108,8 +177,9 @@ def _run_job(job_id, sender, items, from_email, start_index=0):
     quota; Pause leaves it reserved since the job can still finish."""
     with _jobs_lock:
         results = list(JOBS[job_id]['results'])
-    total = len(items)
-    for i in range(start_index, total):
+        total = JOBS[job_id]['total']
+    queued_total = len(items)
+    for i in range(start_index, queued_total):
         item = items[i]
         with _jobs_lock:
             job = JOBS[job_id]
@@ -135,18 +205,22 @@ def _run_job(job_id, sender, items, from_email, start_index=0):
                 break
         with _jobs_lock:
             JOBS[job_id]['next_send_at'] = None
+        if not wait_for_network(job_id, sender):
+            break
         result = sender.send_email(item['to'], item['subject'], item['body'])
+        result['message_key'] = item['message_key']
         results.append(result)
         _append_send_log(job_id, from_email, result)
         with _jobs_lock:
             JOBS[job_id]['results'] = results
-            JOBS[job_id]['sent'] = sum(1 for r in results if r['success'])
-            JOBS[job_id]['failed'] = sum(1 for r in results if not r['success'])
+            JOBS[job_id]['attempted_send_count'] += 1
+            JOBS[job_id]['sent'] = sum(1 for r in results if r['success'] and not r.get('skipped'))
+            JOBS[job_id]['failed'] = sum(1 for r in results if not r['success'] and not r.get('skipped'))
             JOBS[job_id]['status'] = f'sent {len(results)}/{total}'
 
     with _jobs_lock:
         job = JOBS[job_id]
-        unsent = total - len(results)
+        unsent = queued_total - job['attempted_send_count']
         cancelled, paused = job['cancelled'], job['paused']
         job['next_send_at'] = None
         if cancelled:
@@ -163,10 +237,13 @@ def _run_job(job_id, sender, items, from_email, start_index=0):
     elif not paused:
         _JOB_CONTEXT.pop(job_id, None)
 
-def start_job(sender, items, from_email):
+def start_job(sender, items, from_email, skipped_results=None):
     job_id = str(uuid.uuid4())
+    skipped_results = skipped_results or []
     JOBS[job_id] = {
-        'total': len(items), 'sent': 0, 'failed': 0, 'results': [],
+        'total': len(items) + len(skipped_results), 'sent': 0, 'failed': 0,
+        'skipped': len(skipped_results), 'results': skipped_results,
+        'attempted_send_count': 0,
         'done': False, 'cancelled': False, 'paused': False, 'status': 'starting',
         'next_send_at': None,
     }
@@ -185,7 +262,7 @@ def cancel_job(job_id):
         if job['paused']:
             # No thread is running to notice this flag — the job's loop
             # already exited when it paused. Finalize it here instead.
-            unsent = job['total'] - len(job['results'])
+            unsent = len(_JOB_CONTEXT.get(job_id, {}).get('items', [])) - job['attempted_send_count']
             from_email = _JOB_CONTEXT.get(job_id, {}).get('from_email')
             job['done'] = True
             job['paused'] = False
@@ -222,7 +299,7 @@ def resume_job(job_id):
             return False, 'Job is not paused'
         job['paused'] = False
         job['status'] = 'resuming'
-        start_index = len(job['results'])
+        start_index = job['attempted_send_count']
     ctx = _JOB_CONTEXT.get(job_id)
     if not ctx:
         return False, 'Lost the context needed to resume this job (server may have restarted)'
@@ -438,6 +515,16 @@ def send_single_email():
         if not all([from_email, password, to_email, subject, body]):
             return jsonify({'success': False, 'error': 'Missing required fields'}), 400
 
+        message_key = _message_key(to_email, subject, body)
+        if message_key in _already_sent_keys():
+            result = {
+                'success': False, 'skipped': True, 'recipient': to_email,
+                'error': 'Duplicate email: this exact message was already sent to this recipient.',
+                'message_key': message_key,
+            }
+            _append_send_log('single', from_email, result)
+            return jsonify(result)
+
         ok, quota_error = reserve_daily_quota(from_email, 1, data.get('daily_limit'))
         if not ok:
             return jsonify({'success': False, 'error': quota_error}), 429
@@ -451,6 +538,7 @@ def send_single_email():
             return jsonify({'success': False, 'error': cred_error, 'auth_error': True}), 401
 
         result = sender.send_email(to_email, subject, body)
+        result['message_key'] = message_key
         _append_send_log('single', from_email, result)
         
         return jsonify(result)
@@ -485,7 +573,17 @@ def send_bulk_emails():
         if not isinstance(recipients, list) or len(recipients) == 0:
             return jsonify({'success': False, 'error': 'Recipients must be a non-empty list'}), 400
 
-        ok, quota_error = reserve_daily_quota(from_email, len(recipients), data.get('daily_limit'))
+        requested_items = [{'to': r, 'subject': subject, 'body': body} for r in recipients]
+        items, skipped_results = split_duplicate_messages(requested_items)
+
+        if not items:
+            job_id = start_job(None, [], from_email, skipped_results)
+            for result in skipped_results:
+                _append_send_log(job_id, from_email, result)
+            return jsonify({'success': True, 'job_id': job_id, 'total': len(requested_items),
+                            'skipped_duplicates': len(skipped_results)})
+
+        ok, quota_error = reserve_daily_quota(from_email, len(items), data.get('daily_limit'))
         if not ok:
             return jsonify({'success': False, 'error': quota_error}), 429
 
@@ -493,13 +591,15 @@ def send_bulk_emails():
 
         cred_ok, cred_error = sender.verify_credentials()
         if not cred_ok:
-            release_daily_quota(from_email, len(recipients))
+            release_daily_quota(from_email, len(items))
             return jsonify({'success': False, 'error': cred_error, 'auth_error': True}), 401
 
-        items = [{'to': r, 'subject': subject, 'body': body} for r in recipients]
-        job_id = start_job(sender, items, from_email)
+        job_id = start_job(sender, items, from_email, skipped_results)
+        for result in skipped_results:
+            _append_send_log(job_id, from_email, result)
 
-        return jsonify({'success': True, 'job_id': job_id, 'total': len(items)})
+        return jsonify({'success': True, 'job_id': job_id, 'total': len(requested_items),
+                        'skipped_duplicates': len(skipped_results)})
         
     except Exception as e:
         logger.error(f"Error in send_bulk_emails: {str(e)}")
@@ -533,7 +633,16 @@ def send_personalized_emails():
             if not all([m.get('to'), m.get('subject'), m.get('body')]):
                 return jsonify({'success': False, 'error': f'messages[{i}] is missing to/subject/body'}), 400
 
-        ok, quota_error = reserve_daily_quota(from_email, len(messages), data.get('daily_limit'))
+        items, skipped_results = split_duplicate_messages(messages)
+
+        if not items:
+            job_id = start_job(None, [], from_email, skipped_results)
+            for result in skipped_results:
+                _append_send_log(job_id, from_email, result)
+            return jsonify({'success': True, 'job_id': job_id, 'total': len(messages),
+                            'skipped_duplicates': len(skipped_results)})
+
+        ok, quota_error = reserve_daily_quota(from_email, len(items), data.get('daily_limit'))
         if not ok:
             return jsonify({'success': False, 'error': quota_error}), 429
 
@@ -541,12 +650,15 @@ def send_personalized_emails():
 
         cred_ok, cred_error = sender.verify_credentials()
         if not cred_ok:
-            release_daily_quota(from_email, len(messages))
+            release_daily_quota(from_email, len(items))
             return jsonify({'success': False, 'error': cred_error, 'auth_error': True}), 401
 
-        job_id = start_job(sender, messages, from_email)
+        job_id = start_job(sender, items, from_email, skipped_results)
+        for result in skipped_results:
+            _append_send_log(job_id, from_email, result)
 
-        return jsonify({'success': True, 'job_id': job_id, 'total': len(messages)})
+        return jsonify({'success': True, 'job_id': job_id, 'total': len(messages),
+                        'skipped_duplicates': len(skipped_results)})
 
     except Exception as e:
         logger.error(f"Error in send_personalized_emails: {str(e)}")

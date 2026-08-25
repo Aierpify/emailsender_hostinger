@@ -244,7 +244,7 @@
 
         .status-details {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 15px;
             margin-top: 15px;
         }
@@ -623,6 +623,10 @@ Team"></textarea>
                         <div class="stat-value" id="failCount">0</div>
                         <div class="stat-label">Failed</div>
                     </div>
+                    <div class="stat-box">
+                        <div class="stat-value" id="skippedCount">0</div>
+                        <div class="stat-label">Duplicates skipped</div>
+                    </div>
                 </div>
                 <div class="live-log" id="liveLog"></div>
                 <div class="error-log" id="errorLog"></div>
@@ -634,6 +638,29 @@ Team"></textarea>
         let isSending = false;
         let currentMode = 'same';
         let rowIdCounter = 0;
+        let wakeLock = null;
+
+        async function acquireWakeLock() {
+            if (!('wakeLock' in navigator)) return;
+            try {
+                wakeLock = await navigator.wakeLock.request('screen');
+                wakeLock.addEventListener('release', () => { wakeLock = null; });
+            } catch (error) {
+                // The browser may deny this until the page is visible again.
+                console.warn('Could not keep the screen awake:', error.message);
+            }
+        }
+
+        async function releaseWakeLock() {
+            if (wakeLock) {
+                await wakeLock.release();
+                wakeLock = null;
+            }
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            if (isSending && document.visibilityState === 'visible') acquireWakeLock();
+        });
 
         function setMode(mode) {
             currentMode = mode;
@@ -996,6 +1023,7 @@ Team"></textarea>
             const totalCount = document.getElementById('totalCount');
             const successCount = document.getElementById('successCount');
             const failCount = document.getElementById('failCount');
+            const skippedCount = document.getElementById('skippedCount');
             const errorLog = document.getElementById('errorLog');
             const liveLog = document.getElementById('liveLog');
 
@@ -1003,6 +1031,7 @@ Team"></textarea>
             totalCount.textContent = total;
             successCount.textContent = '0';
             failCount.textContent = '0';
+            skippedCount.textContent = '0';
             progressFill.style.width = '0%';
             errorLog.innerHTML = '';
             errorLog.classList.remove('active');
@@ -1010,6 +1039,7 @@ Team"></textarea>
             liveLog.classList.remove('active');
             statusText.textContent = `Queuing ${total} emails...`;
             updateNextSendTimer(null);
+            await acquireWakeLock();
 
             let loggedCount = 0;
             currentJobId = null;
@@ -1058,14 +1088,15 @@ Team"></textarea>
 
                     successCount.textContent = job.sent;
                     failCount.textContent = job.failed;
-                    const done = job.sent + job.failed;
+                    skippedCount.textContent = job.skipped || 0;
+                    const done = job.sent + job.failed + (job.skipped || 0);
                     progressFill.style.width = Math.min((done / total) * 100, 100) + '%';
                     updateNextSendTimer(job.next_send_at);
 
                     if (job.done) {
                         statusText.textContent = job.status === 'stopped by user'
-                            ? `⏹ Stopped — ${job.sent} sent, ${job.failed} failed, ${total - done} not attempted`
-                            : `✅ Complete! ${job.sent} sent, ${job.failed} failed`;
+                            ? `⏹ Stopped — ${job.sent} sent, ${job.failed} failed, ${job.skipped || 0} duplicates skipped, ${total - done} not attempted`
+                            : `✅ Complete! ${job.sent} sent, ${job.failed} failed, ${job.skipped || 0} duplicates skipped`;
                         if (job.failed > 0) {
                             errorLog.classList.add('active');
                             errorLog.innerHTML = job.results.filter(r => !r.success).map(e =>
@@ -1096,6 +1127,7 @@ Team"></textarea>
             }
 
             updateNextSendTimer(null);
+            await releaseWakeLock();
             stopBtn.classList.remove('active');
             pauseBtn.classList.remove('active');
             sendBtn.disabled = false;
