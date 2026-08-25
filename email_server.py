@@ -88,6 +88,9 @@ def _append_send_log(job_id, from_email, entry):
 # ---- Background send jobs (needed once sends are spaced out by minutes) ----
 JOBS = {}
 _jobs_lock = threading.Lock()
+# Context needed to resume a paused job (sender/items/from_email). Kept out
+# of JOBS so it never gets serialized back in a /api/job-status response.
+_JOB_CONTEXT = {}
 
 def next_delay(index):
     """Random gap before the next send. Minimum 5 minutes, with the range
@@ -96,34 +99,39 @@ def next_delay(index):
     ceiling = min(300 + index * 30, 1200)
     return random.uniform(300, ceiling)
 
-def _run_job(job_id, sender, items, from_email):
+def _run_job(job_id, sender, items, from_email, start_index=0):
     """items: list of {'to', 'subject', 'body'} dicts, sent one at a time
-    with a random delay between each (see next_delay). Checks the job's
-    'cancelled' flag before each send/wait so the Stop button can interrupt
-    it; any not-yet-sent items have their reserved quota released."""
-    results = []
+    with a random delay between each (see next_delay), starting at
+    start_index (0 for a fresh job, len(results) when resuming a paused
+    one). Checks the job's 'cancelled'/'paused' flags before each
+    send/wait so Stop/Pause can interrupt it. Stop releases any unsent
+    quota; Pause leaves it reserved since the job can still finish."""
+    with _jobs_lock:
+        results = list(JOBS[job_id]['results'])
     total = len(items)
-    for i, item in enumerate(items):
+    for i in range(start_index, total):
+        item = items[i]
         with _jobs_lock:
-            cancelled = JOBS[job_id]['cancelled']
-        if cancelled:
+            job = JOBS[job_id]
+            cancelled, paused = job['cancelled'], job['paused']
+        if cancelled or paused:
             break
         if i > 0:
             delay = next_delay(i)
             with _jobs_lock:
                 JOBS[job_id]['status'] = f'waiting ~{int(delay / 60)} min before next send'
                 JOBS[job_id]['next_send_at'] = time.time() + delay
-            # Sleep in small slices so a cancel mid-wait takes effect quickly
+            # Sleep in small slices so a cancel/pause mid-wait takes effect quickly
             slept = 0
             while slept < delay:
                 with _jobs_lock:
-                    if JOBS[job_id]['cancelled']:
+                    if JOBS[job_id]['cancelled'] or JOBS[job_id]['paused']:
                         break
                 time.sleep(min(2, delay - slept))
                 slept += 2
             with _jobs_lock:
-                cancelled = JOBS[job_id]['cancelled']
-            if cancelled:
+                cancelled, paused = JOBS[job_id]['cancelled'], JOBS[job_id]['paused']
+            if cancelled or paused:
                 break
         with _jobs_lock:
             JOBS[job_id]['next_send_at'] = None
@@ -137,21 +145,32 @@ def _run_job(job_id, sender, items, from_email):
             JOBS[job_id]['status'] = f'sent {len(results)}/{total}'
 
     with _jobs_lock:
+        job = JOBS[job_id]
         unsent = total - len(results)
-        cancelled = JOBS[job_id]['cancelled']
-        JOBS[job_id]['done'] = True
-        JOBS[job_id]['next_send_at'] = None
-        JOBS[job_id]['status'] = 'stopped by user' if cancelled else 'complete'
+        cancelled, paused = job['cancelled'], job['paused']
+        job['next_send_at'] = None
+        if cancelled:
+            job['done'] = True
+            job['status'] = 'stopped by user'
+        elif paused:
+            job['status'] = f'paused ({len(results)}/{total} sent)'
+        else:
+            job['done'] = True
+            job['status'] = 'complete'
     if cancelled and unsent > 0:
         release_daily_quota(from_email, unsent)
+        _JOB_CONTEXT.pop(job_id, None)
+    elif not paused:
+        _JOB_CONTEXT.pop(job_id, None)
 
 def start_job(sender, items, from_email):
     job_id = str(uuid.uuid4())
     JOBS[job_id] = {
         'total': len(items), 'sent': 0, 'failed': 0, 'results': [],
-        'done': False, 'cancelled': False, 'status': 'starting',
+        'done': False, 'cancelled': False, 'paused': False, 'status': 'starting',
         'next_send_at': None,
     }
+    _JOB_CONTEXT[job_id] = {'sender': sender, 'items': items, 'from_email': from_email}
     threading.Thread(target=_run_job, args=(job_id, sender, items, from_email), daemon=True).start()
     return job_id
 
@@ -163,7 +182,57 @@ def cancel_job(job_id):
         if job['done']:
             return False
         job['cancelled'] = True
-        return True
+        if job['paused']:
+            # No thread is running to notice this flag — the job's loop
+            # already exited when it paused. Finalize it here instead.
+            unsent = job['total'] - len(job['results'])
+            from_email = _JOB_CONTEXT.get(job_id, {}).get('from_email')
+            job['done'] = True
+            job['paused'] = False
+            job['status'] = 'stopped by user'
+            job['next_send_at'] = None
+        else:
+            unsent = 0
+            from_email = None
+    if unsent > 0 and from_email:
+        release_daily_quota(from_email, unsent)
+    _JOB_CONTEXT.pop(job_id, None)
+    return True
+
+def pause_job(job_id):
+    with _jobs_lock:
+        job = JOBS.get(job_id)
+        if not job:
+            return False, 'Job not found'
+        if job['done']:
+            return False, 'Job already finished'
+        if job['paused']:
+            return False, 'Job already paused'
+        job['paused'] = True
+        return True, None
+
+def resume_job(job_id):
+    with _jobs_lock:
+        job = JOBS.get(job_id)
+        if not job:
+            return False, 'Job not found'
+        if job['done']:
+            return False, 'Job already finished'
+        if not job['paused']:
+            return False, 'Job is not paused'
+        job['paused'] = False
+        job['status'] = 'resuming'
+        start_index = len(job['results'])
+    ctx = _JOB_CONTEXT.get(job_id)
+    if not ctx:
+        return False, 'Lost the context needed to resume this job (server may have restarted)'
+    threading.Thread(
+        target=_run_job,
+        args=(job_id, ctx['sender'], ctx['items'], ctx['from_email'], start_index),
+        daemon=True
+    ).start()
+    return True, None
+
 
 def guess_imap_server(smtp_server):
     """Best-effort default: most providers use imap.<domain> alongside smtp.<domain>"""
@@ -208,6 +277,31 @@ class EmailSender:
             return {'saved': False, 'error': 'No writable Sent folder found on this account'}
         except Exception as e:
             return {'saved': False, 'error': str(e)}
+
+    def verify_credentials(self):
+        """Log in to the SMTP server without sending anything, just to
+        confirm the email/password are correct before a job (or single
+        send) commits to anything. Returns (ok, error_message)."""
+        try:
+            if self.smtp_port == 465:
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                with smtplib.SMTP_SSL(self.smtp_server, self.smtp_port, context=context, timeout=15) as server:
+                    server.login(self.email, self.password)
+            else:
+                with smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=15) as server:
+                    if self.smtp_port == 587:
+                        context = ssl.create_default_context()
+                        context.check_hostname = False
+                        context.verify_mode = ssl.CERT_NONE
+                        server.starttls(context=context)
+                    server.login(self.email, self.password)
+            return True, None
+        except smtplib.SMTPAuthenticationError:
+            return False, 'Incorrect email or password for this account. Please re-enter the correct password.'
+        except Exception as e:
+            return False, f'Could not verify credentials: {str(e)}'
 
     def send_email(self, to_email, subject, body):
         """Send a single email with retry logic"""
@@ -350,6 +444,12 @@ def send_single_email():
 
         # Send email
         sender = EmailSender(smtp_server, smtp_port, from_email, password, imap_server, imap_port, save_to_sent)
+
+        cred_ok, cred_error = sender.verify_credentials()
+        if not cred_ok:
+            release_daily_quota(from_email, 1)
+            return jsonify({'success': False, 'error': cred_error, 'auth_error': True}), 401
+
         result = sender.send_email(to_email, subject, body)
         _append_send_log('single', from_email, result)
         
@@ -390,6 +490,12 @@ def send_bulk_emails():
             return jsonify({'success': False, 'error': quota_error}), 429
 
         sender = EmailSender(smtp_server, smtp_port, from_email, password, imap_server, imap_port, save_to_sent)
+
+        cred_ok, cred_error = sender.verify_credentials()
+        if not cred_ok:
+            release_daily_quota(from_email, len(recipients))
+            return jsonify({'success': False, 'error': cred_error, 'auth_error': True}), 401
+
         items = [{'to': r, 'subject': subject, 'body': body} for r in recipients]
         job_id = start_job(sender, items, from_email)
 
@@ -432,6 +538,12 @@ def send_personalized_emails():
             return jsonify({'success': False, 'error': quota_error}), 429
 
         sender = EmailSender(smtp_server, smtp_port, from_email, password, imap_server, imap_port, save_to_sent)
+
+        cred_ok, cred_error = sender.verify_credentials()
+        if not cred_ok:
+            release_daily_quota(from_email, len(messages))
+            return jsonify({'success': False, 'error': cred_error, 'auth_error': True}), 401
+
         job_id = start_job(sender, messages, from_email)
 
         return jsonify({'success': True, 'job_id': job_id, 'total': len(messages)})
@@ -456,6 +568,24 @@ def job_cancel(job_id):
     ok = cancel_job(job_id)
     if not ok:
         return jsonify({'success': False, 'error': 'Job not found or already finished'}), 404
+    return jsonify({'success': True})
+
+@app.route('/api/job-pause/<job_id>', methods=['POST'])
+def job_pause(job_id):
+    """Pause a running job before its next send. Unsent recipients stay
+    queued (quota stays reserved) so /api/job-resume/<id> can pick up
+    where it left off."""
+    ok, error = pause_job(job_id)
+    if not ok:
+        return jsonify({'success': False, 'error': error}), 404
+    return jsonify({'success': True})
+
+@app.route('/api/job-resume/<job_id>', methods=['POST'])
+def job_resume(job_id):
+    """Resume a paused job, continuing from the first unsent recipient."""
+    ok, error = resume_job(job_id)
+    if not ok:
+        return jsonify({'success': False, 'error': error}), 404
     return jsonify({'success': True})
 
 @app.route('/api/send-log', methods=['GET'])
@@ -533,6 +663,8 @@ if __name__ == '__main__':
     print("  POST /api/send-personalized - Queue personalized send (spaced 5+ min apart)")
     print("  GET  /api/job-status/<id>   - Poll a bulk/personalized job")
     print("  POST /api/job-cancel/<id>   - Stop a running job (releases unused quota)")
+    print("  POST /api/job-pause/<id>    - Pause a running job (keeps quota reserved)")
+    print("  POST /api/job-resume/<id>   - Resume a paused job")
     print("  GET  /api/send-log          - Recent send attempts (who/why not)")
     print("  POST /api/parse-csv         - Extract recipient rows from a CSV upload")
     print("  GET  /api/health            - Health check")

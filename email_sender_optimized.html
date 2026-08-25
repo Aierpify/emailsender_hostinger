@@ -121,6 +121,32 @@
             gap: 15px;
         }
 
+        .password-wrapper {
+            position: relative;
+        }
+
+        .password-wrapper input {
+            padding-right: 44px;
+        }
+
+        .password-toggle {
+            position: absolute;
+            right: 6px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 6px 8px;
+            line-height: 1;
+            color: #888;
+        }
+
+        .password-toggle:hover {
+            color: #333;
+        }
+
         .recipients-area {
             position: relative;
         }
@@ -293,6 +319,18 @@
             display: block;
         }
 
+        .btn-pause {
+            background: #f57c00;
+            width: auto;
+            padding: 14px 24px;
+            flex-shrink: 0;
+            display: none;
+        }
+
+        .btn-pause.active {
+            display: block;
+        }
+
         .next-send-timer {
             font-size: 13px;
             color: #667eea;
@@ -460,7 +498,10 @@
                     </div>
                     <div class="input-group">
                         <label>Password</label>
-                        <input type="password" id="emailPassword" placeholder="Your email password">
+                        <div class="password-wrapper">
+                            <input type="password" id="emailPassword" placeholder="Your email password">
+                            <button type="button" class="password-toggle" id="passwordToggle" onclick="togglePasswordVisibility()" aria-label="Show password">👁</button>
+                        </div>
                     </div>
                 </div>
                 <div class="smtp-grid">
@@ -553,10 +594,14 @@ Team"></textarea>
                 <button class="btn" id="sendBtn" onclick="sendEmails()">
                     🚀 Send Emails
                 </button>
+                <button class="btn btn-pause" id="pauseBtn" onclick="pauseJob()">
+                    ⏸ Pause
+                </button>
                 <button class="btn btn-stop" id="stopBtn" onclick="stopJob()">
                     ⏹ Stop
                 </button>
             </div>
+
 
             <div class="status" id="status">
                 <div class="mode-indicator" id="modeIndicator">Standard Mode</div>
@@ -698,6 +743,15 @@ Team"></textarea>
             event.target.value = '';
         }
 
+        function togglePasswordVisibility() {
+            const input = document.getElementById('emailPassword');
+            const toggle = document.getElementById('passwordToggle');
+            const showing = input.type === 'text';
+            input.type = showing ? 'password' : 'text';
+            toggle.textContent = showing ? '👁' : '🙈';
+            toggle.setAttribute('aria-label', showing ? 'Show password' : 'Hide password');
+        }
+
         function getDailyLimit() {
             return parseInt(document.getElementById('dailyLimit').value, 10) || 30;
         }
@@ -816,6 +870,71 @@ Team"></textarea>
             stopBtn.textContent = '⏹ Stop';
         }
 
+        let isPaused = false;
+
+        async function pauseJob() {
+            if (!currentJobId) return;
+            const pauseBtn = document.getElementById('pauseBtn');
+            pauseBtn.disabled = true;
+            pauseBtn.textContent = '⏳ Pausing...';
+            try {
+                const res = await fetch(`http://localhost:5000/api/job-pause/${currentJobId}`, { method: 'POST' });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Failed to pause');
+            } catch (error) {
+                alert('Failed to pause: ' + error.message);
+                pauseBtn.disabled = false;
+                pauseBtn.textContent = '⏸ Pause';
+            }
+            // Button text/behavior flips to Resume once polling sees the paused status.
+        }
+
+        async function resumeJob() {
+            if (!currentJobId) return;
+            const pauseBtn = document.getElementById('pauseBtn');
+            pauseBtn.disabled = true;
+            pauseBtn.textContent = '⏳ Resuming...';
+            try {
+                const res = await fetch(`http://localhost:5000/api/job-resume/${currentJobId}`, { method: 'POST' });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error || 'Failed to resume');
+                isPaused = false;
+                pauseBtn.onclick = pauseJob;
+                pauseBtn.textContent = '⏸ Pause';
+            } catch (error) {
+                alert('Failed to resume: ' + error.message);
+                pauseBtn.textContent = '▶ Resume';
+            }
+            pauseBtn.disabled = false;
+        }
+
+        // Remove a recipient from the pending list once a send is attempted
+        // (success or fail). Log/liveLog entries are untouched — they persist.
+        function removeSentRecipient(recipientEmail) {
+            if (!recipientEmail) return;
+            const target = recipientEmail.trim().toLowerCase();
+
+            if (currentMode === 'personalized') {
+                const rows = document.querySelectorAll('#personalizedRows .personalized-row');
+                for (const row of rows) {
+                    const toField = row.querySelector('.p-to');
+                    if (toField && toField.value.trim().toLowerCase() === target) {
+                        row.remove();
+                        break;
+                    }
+                }
+            } else {
+                const textarea = document.getElementById('recipients');
+                const lines = textarea.value.split('\n');
+                const idx = lines.findIndex(l => l.trim().toLowerCase() === target);
+                if (idx !== -1) {
+                    lines.splice(idx, 1);
+                    textarea.value = lines.join('\n');
+                    textarea.dispatchEvent(new Event('input'));
+                }
+            }
+        }
+
         function renderLiveLogItem(result) {
             const liveLog = document.getElementById('liveLog');
             liveLog.classList.add('active');
@@ -854,13 +973,19 @@ Team"></textarea>
         // spaces sends 5+ minutes apart) and polls it until done.
         async function runJob(endpoint, payload, total, label) {
             isSending = true;
+            isPaused = false;
             const sendBtn = document.getElementById('sendBtn');
             const stopBtn = document.getElementById('stopBtn');
+            const pauseBtn = document.getElementById('pauseBtn');
             sendBtn.disabled = true;
             sendBtn.textContent = '⏳ Sending...';
             stopBtn.classList.add('active');
             stopBtn.disabled = false;
             stopBtn.textContent = '⏹ Stop';
+            pauseBtn.classList.add('active');
+            pauseBtn.disabled = false;
+            pauseBtn.textContent = '⏸ Pause';
+            pauseBtn.onclick = pauseJob;
 
             const status = document.getElementById('status');
             status.classList.add('active');
@@ -896,7 +1021,26 @@ Team"></textarea>
                     body: JSON.stringify(payload)
                 });
                 const data = await response.json();
-                if (!data.success) throw new Error(data.error || 'Failed to start send job');
+                if (!data.success) {
+                    if (data.auth_error) {
+                        statusText.textContent = `🔒 ${data.error}`;
+                        errorLog.classList.add('active');
+                        errorLog.innerHTML = `<div class="error-item">${data.error}</div>`;
+                        const pwInput = document.getElementById('emailPassword');
+                        pwInput.value = '';
+                        pwInput.focus();
+                        pwInput.style.borderColor = '#d32f2f';
+                        setTimeout(() => { pwInput.style.borderColor = ''; }, 4000);
+                        stopBtn.classList.remove('active');
+                        pauseBtn.classList.remove('active');
+                        sendBtn.disabled = false;
+                        sendBtn.textContent = '🚀 Send Emails';
+                        isSending = false;
+                        currentJobId = null;
+                        return;
+                    }
+                    throw new Error(data.error || 'Failed to start send job');
+                }
 
                 const jobId = data.job_id;
                 currentJobId = jobId;
@@ -909,6 +1053,7 @@ Team"></textarea>
                     // Append any newly-arrived results to the live log
                     for (; loggedCount < job.results.length; loggedCount++) {
                         renderLiveLogItem(job.results[loggedCount]);
+                        removeSentRecipient(job.results[loggedCount].recipient);
                     }
 
                     successCount.textContent = job.sent;
@@ -929,6 +1074,19 @@ Team"></textarea>
                         }
                         break;
                     }
+
+                    const nowPaused = job.status.startsWith('paused');
+                    if (nowPaused && !isPaused) {
+                        isPaused = true;
+                        pauseBtn.disabled = false;
+                        pauseBtn.textContent = '▶ Resume';
+                        pauseBtn.onclick = resumeJob;
+                    } else if (!nowPaused && isPaused) {
+                        isPaused = false;
+                        pauseBtn.disabled = false;
+                        pauseBtn.textContent = '⏸ Pause';
+                        pauseBtn.onclick = pauseJob;
+                    }
                     statusText.textContent = `${job.status} (${done}/${total})`;
                 }
             } catch (error) {
@@ -939,9 +1097,11 @@ Team"></textarea>
 
             updateNextSendTimer(null);
             stopBtn.classList.remove('active');
+            pauseBtn.classList.remove('active');
             sendBtn.disabled = false;
             sendBtn.textContent = '🚀 Send Emails';
             isSending = false;
+            isPaused = false;
             currentJobId = null;
         }
     </script>
