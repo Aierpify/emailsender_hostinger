@@ -65,6 +65,25 @@ def reserve_daily_quota(from_email, count, daily_limit=None):
             json.dump(data, f)
         return True, None
 
+def reserve_partial_quota(from_email, count, daily_limit=None):
+    """Like reserve_daily_quota, but never rejects outright: reserves as many
+    of `count` as still fit under today's limit (0..count) and reports the
+    rest as overflow instead of erroring. Returns (reserved, remaining_before,
+    daily_limit) where `remaining_before` is how much room was left before
+    this call."""
+    daily_limit = min(max(int(daily_limit or DEFAULT_DAILY_LIMIT), 1), HARD_DAILY_CAP)
+    key = f"{from_email.strip().lower()}:{datetime.date.today().isoformat()}"
+    with _quota_lock:
+        data = _load_quota()
+        used = data.get(key, 0)
+        remaining_before = max(daily_limit - used, 0)
+        reserved = min(count, remaining_before)
+        if reserved > 0:
+            data[key] = used + reserved
+            with open(QUOTA_FILE, 'w') as f:
+                json.dump(data, f)
+        return reserved, remaining_before, daily_limit
+
 def release_daily_quota(from_email, count):
     """Give back `count` reserved-but-unused sends (e.g. a cancelled job) to
     today's quota for from_email."""
@@ -583,24 +602,50 @@ def send_bulk_emails():
             return jsonify({'success': True, 'job_id': job_id, 'total': len(requested_items),
                             'skipped_duplicates': len(skipped_results)})
 
-        ok, quota_error = reserve_daily_quota(from_email, len(items), data.get('daily_limit'))
-        if not ok:
-            return jsonify({'success': False, 'error': quota_error}), 429
+        reserved, remaining_before, daily_limit = reserve_partial_quota(
+            from_email, len(items), data.get('daily_limit'))
+        send_now, deferred = items[:reserved], items[reserved:]
+        deferred_recipients = [{'to': it['to']} for it in deferred]
+
+        if not send_now:
+            # Nothing fits under today's limit — log the whole batch as deferred
+            # and hand it straight back so the caller can queue it for tomorrow.
+            job_id = start_job(None, [], from_email, skipped_results)
+            for result in skipped_results:
+                _append_send_log(job_id, from_email, result)
+            return jsonify({
+                'success': True, 'job_id': job_id, 'total': len(requested_items),
+                'skipped_duplicates': len(skipped_results),
+                'sent_today_count': 0, 'deferred_count': len(deferred),
+                'deferred_recipients': deferred_recipients,
+                'subject': subject, 'body': body,
+                'quota_note': (f"Daily send limit reached: {remaining_before}/{daily_limit} "
+                                f"remaining today, {len(items)} requested. All {len(deferred)} "
+                                f"queued for tomorrow.") if deferred else None,
+            })
 
         sender = EmailSender(smtp_server, smtp_port, from_email, password, imap_server, imap_port, save_to_sent)
 
         cred_ok, cred_error = sender.verify_credentials()
         if not cred_ok:
-            release_daily_quota(from_email, len(items))
+            release_daily_quota(from_email, len(send_now))
             return jsonify({'success': False, 'error': cred_error, 'auth_error': True}), 401
 
-        job_id = start_job(sender, items, from_email, skipped_results)
+        job_id = start_job(sender, send_now, from_email, skipped_results)
         for result in skipped_results:
             _append_send_log(job_id, from_email, result)
 
-        return jsonify({'success': True, 'job_id': job_id, 'total': len(requested_items),
-                        'skipped_duplicates': len(skipped_results)})
-        
+        return jsonify({
+            'success': True, 'job_id': job_id, 'total': len(requested_items),
+            'skipped_duplicates': len(skipped_results),
+            'sent_today_count': len(send_now), 'deferred_count': len(deferred),
+            'deferred_recipients': deferred_recipients,
+            'subject': subject, 'body': body,
+            'quota_note': (f"Only {remaining_before} of the {len(items)} requested fit under "
+                            f"today's limit ({daily_limit}/day). Sending {len(send_now)} now; "
+                            f"{len(deferred)} queued for tomorrow.") if deferred else None,
+        })
+
     except Exception as e:
         logger.error(f"Error in send_bulk_emails: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -642,23 +687,45 @@ def send_personalized_emails():
             return jsonify({'success': True, 'job_id': job_id, 'total': len(messages),
                             'skipped_duplicates': len(skipped_results)})
 
-        ok, quota_error = reserve_daily_quota(from_email, len(items), data.get('daily_limit'))
-        if not ok:
-            return jsonify({'success': False, 'error': quota_error}), 429
+        reserved, remaining_before, daily_limit = reserve_partial_quota(
+            from_email, len(items), data.get('daily_limit'))
+        send_now, deferred = items[:reserved], items[reserved:]
+        deferred_messages = [{'to': it['to'], 'subject': it['subject'], 'body': it['body']} for it in deferred]
+
+        if not send_now:
+            job_id = start_job(None, [], from_email, skipped_results)
+            for result in skipped_results:
+                _append_send_log(job_id, from_email, result)
+            return jsonify({
+                'success': True, 'job_id': job_id, 'total': len(messages),
+                'skipped_duplicates': len(skipped_results),
+                'sent_today_count': 0, 'deferred_count': len(deferred),
+                'deferred_messages': deferred_messages,
+                'quota_note': (f"Daily send limit reached: {remaining_before}/{daily_limit} "
+                                f"remaining today, {len(items)} requested. All {len(deferred)} "
+                                f"queued for tomorrow.") if deferred else None,
+            })
 
         sender = EmailSender(smtp_server, smtp_port, from_email, password, imap_server, imap_port, save_to_sent)
 
         cred_ok, cred_error = sender.verify_credentials()
         if not cred_ok:
-            release_daily_quota(from_email, len(items))
+            release_daily_quota(from_email, len(send_now))
             return jsonify({'success': False, 'error': cred_error, 'auth_error': True}), 401
 
-        job_id = start_job(sender, items, from_email, skipped_results)
+        job_id = start_job(sender, send_now, from_email, skipped_results)
         for result in skipped_results:
             _append_send_log(job_id, from_email, result)
 
-        return jsonify({'success': True, 'job_id': job_id, 'total': len(messages),
-                        'skipped_duplicates': len(skipped_results)})
+        return jsonify({
+            'success': True, 'job_id': job_id, 'total': len(messages),
+            'skipped_duplicates': len(skipped_results),
+            'sent_today_count': len(send_now), 'deferred_count': len(deferred),
+            'deferred_messages': deferred_messages,
+            'quota_note': (f"Only {remaining_before} of the {len(items)} requested fit under "
+                            f"today's limit ({daily_limit}/day). Sending {len(send_now)} now; "
+                            f"{len(deferred)} queued for tomorrow.") if deferred else None,
+        })
 
     except Exception as e:
         logger.error(f"Error in send_personalized_emails: {str(e)}")

@@ -500,7 +500,8 @@
                         <label>Password</label>
                         <div class="password-wrapper">
                             <input type="password" id="emailPassword" placeholder="Your email password">
-                            <button type="button" class="password-toggle" id="passwordToggle" onclick="togglePasswordVisibility()" aria-label="Show password">👁</button>
+                            <button type="button" class="password-toggle" id="passwordToggle"
+                                onclick="togglePasswordVisibility()" aria-label="Show password">👁</button>
                         </div>
                     </div>
                 </div>
@@ -603,6 +604,15 @@ Team"></textarea>
             </div>
 
 
+            <div class="status" id="queuePanel" style="display:none; margin-top:15px;">
+                <div class="mode-indicator" id="queuePanelHeading">📅 Queued for tomorrow</div>
+                <div class="status-text" id="queuePanelText"></div>
+                <div class="btn-row" style="margin-top:10px;">
+                    <button class="btn" id="loadQueueBtn" onclick="loadQueuedForTomorrow()">⬇ Load into form</button>
+                    <button class="btn btn-stop" onclick="clearQueuedForTomorrow()">🗑 Clear queue</button>
+                </div>
+            </div>
+
             <div class="status" id="status">
                 <div class="mode-indicator" id="modeIndicator">Standard Mode</div>
                 <div class="progress-bar">
@@ -638,6 +648,7 @@ Team"></textarea>
         let isSending = false;
         let currentMode = 'same';
         let rowIdCounter = 0;
+        renderQueuePanel();
         let wakeLock = null;
 
         async function acquireWakeLock() {
@@ -661,6 +672,73 @@ Team"></textarea>
         document.addEventListener('visibilitychange', () => {
             if (isSending && document.visibilityState === 'visible') acquireWakeLock();
         });
+
+        // ---- Recipients that didn't fit under today's send limit ----
+        const QUEUE_KEY = 'emailQueue_nextDay';
+
+        function getQueue() {
+            try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch (e) { return []; }
+        }
+
+        function saveQueue(queue) {
+            localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+            renderQueuePanel();
+        }
+
+        function queueForTomorrow(mode, subject, body, items) {
+            if (!items || items.length === 0) return;
+            const queue = getQueue();
+            queue.push({
+                id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                mode, subject: subject || '', body: body || '', items,
+                createdAt: new Date().toISOString()
+            });
+            saveQueue(queue);
+        }
+
+        function renderQueuePanel() {
+            const queue = getQueue();
+            const panel = document.getElementById('queuePanel');
+            const text = document.getElementById('queuePanelText');
+            if (queue.length === 0) { panel.style.display = 'none'; return; }
+            const total = queue.reduce((sum, b) => sum + b.items.length, 0);
+            const oldest = queue[0];
+            text.textContent = `${total} recipient${total === 1 ? '' : 's'} across ${queue.length} `
+                + `batch${queue.length === 1 ? '' : 'es'} — today's daily limit was hit. `
+                + `"Load into form" brings in the oldest batch first `
+                + `(${oldest.items.length} recipient${oldest.items.length === 1 ? '' : 's'}, `
+                + `${oldest.mode === 'personalized' ? 'personalized' : 'same message'} mode).`;
+            panel.style.display = 'block';
+        }
+
+        function loadQueuedForTomorrow() {
+            const queue = getQueue();
+            if (queue.length === 0) return;
+            const batch = queue[0];
+            if (batch.mode === 'personalized') {
+                setMode('personalized');
+                document.getElementById('personalizedRows').innerHTML = '';
+                batch.items.forEach(it => addPersonalizedRow(it));
+            } else {
+                setMode('same');
+                document.getElementById('emailSubject').value = batch.subject;
+                document.getElementById('emailBody').value = batch.body;
+                const textarea = document.getElementById('recipients');
+                const emails = batch.items.map(it => it.to);
+                const existing = textarea.value.trim();
+                textarea.value = existing ? existing + '\n' + emails.join('\n') : emails.join('\n');
+                textarea.dispatchEvent(new Event('input'));
+            }
+            queue.shift();
+            saveQueue(queue);
+            alert(`Loaded ${batch.items.length} queued recipient(s) into the form.`
+                + (queue.length ? ` ${queue.length} batch(es) still queued.` : ''));
+        }
+
+        function clearQueuedForTomorrow() {
+            if (!confirm('Clear everything queued for tomorrow? This cannot be undone.')) return;
+            saveQueue([]);
+        }
 
         function setMode(mode) {
             currentMode = mode;
@@ -1072,6 +1150,19 @@ Team"></textarea>
                     throw new Error(data.error || 'Failed to start send job');
                 }
 
+                if (data.deferred_count > 0) {
+                    const deferredItems = data.deferred_recipients || data.deferred_messages || [];
+                    const mode = endpoint === '/api/send-personalized' ? 'personalized' : 'same';
+                    queueForTomorrow(mode, data.subject, data.body, deferredItems);
+                    // Only sent_today_count emails were actually queued in this job —
+                    // track progress against that, not the original request size.
+                    total = data.total - data.deferred_count;
+                    totalCount.textContent = total;
+                }
+                if (data.quota_note) {
+                    statusText.textContent = data.quota_note;
+                }
+
                 const jobId = data.job_id;
                 currentJobId = jobId;
                 while (true) {
@@ -1094,9 +1185,11 @@ Team"></textarea>
                     updateNextSendTimer(job.next_send_at);
 
                     if (job.done) {
-                        statusText.textContent = job.status === 'stopped by user'
+                        const deferredNote = data.deferred_count > 0
+                            ? ` — ${data.deferred_count} queued for tomorrow (daily limit)` : '';
+                        statusText.textContent = (job.status === 'stopped by user'
                             ? `⏹ Stopped — ${job.sent} sent, ${job.failed} failed, ${job.skipped || 0} duplicates skipped, ${total - done} not attempted`
-                            : `✅ Complete! ${job.sent} sent, ${job.failed} failed, ${job.skipped || 0} duplicates skipped`;
+                            : `✅ Complete! ${job.sent} sent, ${job.failed} failed, ${job.skipped || 0} duplicates skipped`) + deferredNote;
                         if (job.failed > 0) {
                             errorLog.classList.add('active');
                             errorLog.innerHTML = job.results.filter(r => !r.success).map(e =>
